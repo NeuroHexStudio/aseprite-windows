@@ -1,6 +1,11 @@
 name: build
 on:
   workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force rebuild even if release already exists'
+        type: boolean
+        default: false
   schedule:
     - cron: '0 8 * * *'
 
@@ -30,10 +35,19 @@ jobs:
             | jq -r 'if type == "array" and length > 0 then .[0].tag_name else empty end')
           echo "latest_tag: $latest_tag"
           echo "my_latest_tag: $my_latest_tag"
+
           if [[ -z "$latest_tag" || "$latest_tag" == "null" ]]; then
             echo "skip_build=true" >> $GITHUB_OUTPUT
             exit 0
           fi
+
+          if [[ "${{ inputs.force_build }}" == "true" ]]; then
+            echo "Force build requested — skipping version check"
+            echo "aseprite_tag=$latest_tag" >> $GITHUB_OUTPUT
+            echo "skip_build=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
           if [[ "$latest_tag" == "$my_latest_tag" ]]; then
             echo "skip_build=true" >> $GITHUB_OUTPUT
           else
@@ -59,7 +73,6 @@ jobs:
       - name: Setup Ninja
         uses: seanmiddleditch/gha-setup-ninja@v4
 
-      # ── Cache Skia so repeat builds are much faster ──────────────────────
       - name: Cache Skia
         id: cache-skia
         uses: actions/cache@v4
@@ -93,7 +106,6 @@ jobs:
           cd build
           ninja aseprite
 
-      # ── THE FIX: copy the missing DLL into the output folder ─────────────
       - name: Copy required DLLs
         shell: pwsh
         run: |
@@ -101,18 +113,17 @@ jobs:
             -Filter "libcrypto-3-x64.dll" -Recurse -ErrorAction SilentlyContinue `
             | Select-Object -First 1 -ExpandProperty FullName
           if ($dll) {
-            Write-Host "Found DLL at: $dll"
+            Write-Host "Found libcrypto DLL at: $dll"
             Copy-Item $dll "${{ env.BUILD_PATH }}\"
           } else {
-            Write-Error "libcrypto-3-x64.dll not found on runner — build may be broken."
+            Write-Error "libcrypto-3-x64.dll not found on runner!"
             exit 1
           }
-          # Also grab libssl in case it's needed
           $ssl = Get-ChildItem -Path "C:\", "C:\Program Files\", "C:\Windows\System32\" `
             -Filter "libssl-3-x64.dll" -Recurse -ErrorAction SilentlyContinue `
             | Select-Object -First 1 -ExpandProperty FullName
           if ($ssl) {
-            Write-Host "Found SSL DLL at: $ssl"
+            Write-Host "Found libssl DLL at: $ssl"
             Copy-Item $ssl "${{ env.BUILD_PATH }}\"
           }
 
